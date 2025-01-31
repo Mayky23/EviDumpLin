@@ -24,7 +24,7 @@ Pantalla principal
 
 Seleccionamos la ruta donde se guardarán las evidencias
 
-![Comienzan a generarse las evidencias](img/foto2.png)
+![Comienzan a generarse las evidencias](img/img2.png)
 
 Y una vez completado el proceso por completo veremos lo siguiente: 
  
