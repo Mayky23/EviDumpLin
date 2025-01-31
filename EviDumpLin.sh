@@ -12,10 +12,9 @@ printf "%s\n" "| |___\ V /| | |__| | |_| | | | | | | |_) | |____| | | | |"
 printf "%s\n" "|______\_/ |_|_____/ \__,_|_| |_| |_| .__/|______|_|_| |_| "
 printf "%s\n" "                                     | |                   "
 printf "%s\n" "                                     |_|                   "
-
-echo -e "\n---------------------------------------------------"
-echo "  INICIANDO RECOLECCIÓN DE EVIDENCIAS "
-echo "---------------------------------------------------"
+printf "%s\n" ""
+printf "%s\n" "---- By: MARH ---------------------------------------------"
+echo ""
 
 # Función para verificar si el comando existe
 command_exists() {
@@ -23,9 +22,12 @@ command_exists() {
 }
 
 # 1. Solicitar al usuario la ubicación para guardar las evidencias
-echo "¿Dónde desea guardar las evidencias?"
-echo "1. En un dispositivo USB"
-echo "2. En un directorio local"
+echo "============================================"
+echo "||  ¿Dónde desea guardar las evidencias?  ||"
+echo "||                                        ||"
+echo "||  1. En un dispositivo USB              ||"
+echo "||  2. En un directorio local             ||"
+echo "============================================"
 read -p "Ingrese el número de opción (1 o 2): " choice
 
 # Variables para la ruta de las evidencias
@@ -68,10 +70,10 @@ run_and_save() {
     
     # Redirigir salida del comando a archivo
     {
-        echo "---------------------------------------------------"
+        echo "===================================================="
         echo "COMANDO: ${cmd}"
         echo "FECHA DE EJECUCIÓN: $(date)"
-        echo "---------------------------------------------------"
+        echo "===================================================="
         $cmd
         echo -e "\n\n"
     } >> "${outfile}" 2>&1
@@ -219,10 +221,10 @@ sleep 3  # Pausa después de la búsqueda
 # -------------------------------------------------------
 # FINALIZACIÓN
 # -------------------------------------------------------
-echo "---------------------------------------------------"
+echo "==================================================="
 echo " RECOLECCIÓN FINALIZADA "
 echo " Los archivos de evidencia se guardaron en:"
 echo "   ${EVIDENCE_DIR}"
-echo "---------------------------------------------------"
+echo "==================================================="
 
 exit 0
