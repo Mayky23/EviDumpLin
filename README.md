@@ -31,6 +31,7 @@ Y una vez completado el proceso por completo veremos lo siguiente:
 ![Finalización del proceso](img/img3.png)
 
 Ahora podremos comprobar todas las evidencias clasificadas por carpetas 
+#
 ![Evidencias](img/img4.png)
 ![Evidencias](img/img5.png)
 ![Evidencias](img/img6.png)
