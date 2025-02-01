@@ -92,7 +92,7 @@ sleep 5  # Espera 5 segundos para asegurar que la copia de los logs se complete
 run_and_save "date" "${EVIDENCE_DIR}/sistema/fecha.txt"
 sleep 2  # Pausa de 2 segundos
 
-run_and_save "hostname" "${EVIDENCE_DIR}/sistema/hostname.txt"
+run_and_save "hostname" "${EVIDENCE_DIR}/usuarios/hostname.txt"  # Modificado: guardado en 'usuarios'
 sleep 2
 
 run_and_save "lscpu" "${EVIDENCE_DIR}/sistema/cpuinfo.txt"
@@ -143,19 +143,19 @@ sleep 3
 run_and_save "cat /etc/passwd" "${EVIDENCE_DIR}/sistema/passwd.txt"
 sleep 2
 
-run_and_save "cat /etc/group" "${EVIDENCE_DIR}/sistema/group.txt"
+run_and_save "cat /etc/group" "${EVIDENCE_DIR}/usuarios/group.txt"  # Modificado: guardado en 'usuarios'
 sleep 2
 
 run_and_save "lastlog" "${EVIDENCE_DIR}/sistema/lastlog.txt"
 sleep 2
 
-run_and_save "whoami" "${EVIDENCE_DIR}/sistema/usuario_ejecutando.txt"
+run_and_save "whoami" "${EVIDENCE_DIR}/usuarios/usuario_ejecutando.txt"  # Modificado: guardado en 'usuarios'
 sleep 2
 
-run_and_save "logname" "${EVIDENCE_DIR}/sistema/usuario_logname.txt"
+run_and_save "logname" "${EVIDENCE_DIR}/usuarios/usuario_logname.txt"  # Modificado: guardado en 'usuarios'
 sleep 2
 
-run_and_save "id" "${EVIDENCE_DIR}/sistema/usuario_id.txt"
+run_and_save "id" "${EVIDENCE_DIR}/usuarios/usuario_id.txt"  # Modificado: guardado en 'usuarios'
 sleep 2
 
 # 5. COPIA DE .bash_history DE CADA USUARIO (Guardado en la carpeta 'usuarios')
@@ -163,13 +163,8 @@ echo "[*] Copiando .bash_history de cada usuario en /home/ ..."
 for user_home in /home/*; do
     if [ -d "$user_home" ]; then
         username=$(basename "$user_home")
-        echo "Revisando el directorio de usuario: $user_home"
-        
         if [ -f "${user_home}/.bash_history" ]; then
             cp "${user_home}/.bash_history" "${EVIDENCE_DIR}/usuarios/bash_history_${username}" 2>/dev/null
-            echo "Copia de .bash_history para $username realizada."
-        else
-            echo "[ERROR] No se encontró .bash_history para $username"
         fi
     fi
 done
