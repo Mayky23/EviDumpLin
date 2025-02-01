@@ -163,8 +163,13 @@ echo "[*] Copiando .bash_history de cada usuario en /home/ ..."
 for user_home in /home/*; do
     if [ -d "$user_home" ]; then
         username=$(basename "$user_home")
+        echo "Revisando el directorio de usuario: $user_home"
+        
         if [ -f "${user_home}/.bash_history" ]; then
             cp "${user_home}/.bash_history" "${EVIDENCE_DIR}/usuarios/bash_history_${username}" 2>/dev/null
+            echo "Copia de .bash_history para $username realizada."
+        else
+            echo "[ERROR] No se encontró .bash_history para $username"
         fi
     fi
 done
