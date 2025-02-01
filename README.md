@@ -53,18 +53,38 @@ Pantalla principal
 
 Seleccionamos la ruta donde se guardarán las evidencias
 
-![Comienzan a generarse las evidencias](img/img2.png)
+![Ruta de guardado](img/img2.png)
+
+Comienzan a generarse las evidencias
+
+![Generacion de evidencias](img/img3.png)
 
 Y una vez completado el proceso por completo veremos lo siguiente: 
  
-![Finalización del proceso](img/img3.png)
+![Finalización del proceso](img/img4.png)
 
 Ahora podremos comprobar todas las evidencias clasificadas por carpetas 
 #
-![Evidencias](img/img4.png)
+SECCIONES DE LAS EVIDENCIAS
+
 ![Evidencias](img/img5.png)
+
+ARCHIVOS
+
 ![Evidencias](img/img6.png)
+
+LOGS
+
 ![Evidencias](img/img7.png)
+
+RED
+
 ![Evidencias](img/img8.png)
-Esta ultima no muestra datos devido a que solo hay un usuario (Aunque queda pendiente su revisión en versiones posteriores)
+
+SISTEMA
+
 ![Evidencias](img/img9.png)
+
+USUARIOS
+
+![Evidencias](img/img10.png)
