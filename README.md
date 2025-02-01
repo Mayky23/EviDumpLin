@@ -30,6 +30,7 @@ Ahora lo ejecutamos
 ```
 
 ⚠️ En caso de error ⚠️
+
 Usar dos2unix (si está disponible en tu sistema):
 
 Si dos2unix está disponible, puedes convertir el archivo con el siguiente comando:
