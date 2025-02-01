@@ -28,6 +28,24 @@ Ahora lo ejecutamos
 ```bash
   ./EviDumpLin.sh
 ```
+
+⚠️ En caso de error ⚠️
+Usar dos2unix (si está disponible en tu sistema):
+
+Si dos2unix está disponible, puedes convertir el archivo con el siguiente comando:
+```bash
+  dos2unix EviDumpLin.sh
+```
+Si dos2unix no está disponible, puedes usar el comando sed para eliminar los caracteres ^M:
+```bash
+  sed -i 's/\r//' EviDumpLin.sh
+```
+Ahora ejecutamos la herramienta
+```bash
+  chmod +x EviDumpLin.sh
+./EviDumpLin.sh
+```
+
 Pantalla principal
 
 ![Pantalla principal de la herramienta](img/img1.png)
