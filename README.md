@@ -8,6 +8,16 @@ El fichero BATCH se lanzará en la máquina que se pretenda peritar. Este shell 
 
 # Como utilizar EviDump 
 
+Clonamos la herramienta
+```bash
+  git clone https://github.com/Mayky23/EviDumpLin.git
+```
+
+Accedemos al directorio
+```bash
+  cd EviDumpLin
+```
+
 ⚠️ Para utilizar este script le daremos permosos de ejecición
 
 ```bash
