@@ -56,19 +56,19 @@ sudo ./EviDumpLin.sh
 ## Estructura del Directorio de Evidencias
 
 EviDump_[CASO]_[FECHAHORA]/
-├── aplicaciones/       # Aplicaciones instaladas y configuraciones
-├── archivos/           # Archivos sospechosos encontrados
-├── cronologia/         # Información de programación y línea de tiempo
-├── dispositivos/       # Información de dispositivos hardware
-├── logs/               # Logs del sistema y aplicaciones
-├── memoria/            # Información y volcados de memoria
-├── red/                # Configuración y conexiones de red
-├── servicios/          # Configuraciones de servicios
-├── sistema/            # Información del sistema y hardware
-├── usuarios/           # Cuentas y actividad de usuarios
-├── evidump.log         # Registro del proceso de recolección
-├── hashes_sha256.txt   # Hashes de integridad para todos los archivos
-└── resumen_evidencias.txt  # Informe resumen
+├── aplicaciones/       
+├── archivos/        
+├── cronologia/       
+├── dispositivos/     
+├── logs/        
+├── memoria/     
+├── red/        
+├── servicios/        
+├── sistema/     
+├── usuarios/    
+├── evidump.log    
+├── hashes_sha256.txt  
+└── resumen_evidencias.txt
 
 ---
 
