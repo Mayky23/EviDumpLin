@@ -1,90 +1,67 @@
-# 🔎💾 EviDumpLin
+# 🔍💾 EviDumpLin - Herramienta de Recolección de Evidencias Forenses para Linux
 
-Haciendo uso de los comandos internos de Linux he creado este script en bash que permite confeccionar un USB-STICK donde se almacenen evidencias.
+## Descripción
 
-El fichero BATCH se lanzará en la máquina que se pretenda peritar. Este shell realiza funciones como copiar registros a la unidad USB externa y recopila información como fecha, hora, usuarios registrados, árbol de procesos, tiempo de actividad del sistema, etc. Todos estos registros se guardan en una carpeta y en formato.txt
+EviDumpLin es un script avanzado para la recolección de evidencias forenses en sistemas Linux, diseñado para recopilar información exhaustiva del sistema durante investigaciones de incidentes y análisis forenses. La herramienta organiza los datos críticos del sistema en directorios categorizados, preservando la integridad de las evidencias.
 
+## Características Principales
 
+- **Recolección exhaustiva**: Recopila información del sistema, procesos, usuarios, red y servicios
+- **Análisis de memoria**: Captura opcional de RAM con herramientas compatibles (lime-forensics/fmem)
+- **Salida estructurada**: Organiza evidencias en categorías lógicas (sistema, usuarios, red, logs, etc.)
+- **Protección de integridad**: Genera hashes SHA256 para todos los archivos recolectados
+- **Interfaz amigable**: Seguimiento de progreso y salida con códigos de color
+- **Opciones flexibles**: Guarda evidencias en USB o directorios locales
 
-# Como utilizar EviDumpLin
+---
 
-Clonamos la herramienta
+## Instalación y Uso
+
+### Requisitos
+- Sistema Linux
+- Privilegios de root
+- Herramientas básicas de terminal (tar, find, grep, etc.)
+
+### Instalación
+
+Clonar el repositorio:
 ```bash
-  git clone https://github.com/Mayky23/EviDumpLin.git
+git clone https://github.com/Mayky23/EviDumpLin.git
+cd EviDumpLin
 ```
 
-Accedemos al directorio
+Dar permisos de ejecución:
 ```bash
-  cd EviDumpLin
+chmod +x EviDumpLin.sh
 ```
 
-⚠️ Para utilizar este script le daremos permosos de ejecición
-
+### Ejecución
+Ejecutar con privilegios root:
 ```bash
-  chmod +x EviDumpLin.sh
-```
-Ahora lo ejecutamos 
-
-```bash
-  ./EviDumpLin.sh
+sudo ./EviDumpLin.sh
 ```
 
-⚠️ En caso de error ⚠️
+---
 
-Usar dos2unix (si está disponible en tu sistema):
+## Opciones de Línea de Comando
 
-Si dos2unix está disponible, puedes convertir el archivo con el siguiente comando:
-```bash
-  dos2unix EviDumpLin.sh
-```
-Si dos2unix no está disponible, puedes usar el comando sed para eliminar los caracteres ^M:
-```bash
-  sed -i 's/\r//' EviDumpLin.sh
-```
-Ahora ejecutamos la herramienta
-```bash
-  chmod +x EviDumpLin.sh
-./EviDumpLin.sh
-```
+| Opción         | Descripción             | Ejemplo                          |
+|----------------|-------------------------|----------------------------------|
+| `-h`, `--help` | Muestra mensaje de ayuda | `./EviDumpLin.sh -h`             |
+| `-v`, `--verbose` | Activa salida detallada | `./EviDumpLin.sh -v`             |
+| `-c`, `--case` | Especifica nombre del caso | `./EviDumpLin.sh -c caso123`     |
+| `-o`, `--output` | Especifica directorio de salida | `./EviDumpLin.sh -o /media/usb` |
 
-Pantalla principal
+---
 
-![Pantalla principal de la herramienta](img/img1.png)
+## Proceso de Recolección
 
-Seleccionamos la ruta donde se guardarán las evidencias
-
-![Ruta de guardado](img/img2.png)
-
-Comienzan a generarse las evidencias
-
-![Generacion de evidencias](img/img3.png)
-
-Y una vez completado el proceso por completo veremos lo siguiente: 
- 
-![Finalización del proceso](img/img4.png)
-
-Ahora podremos comprobar todas las evidencias clasificadas por carpetas 
-#
-SECCIONES DE LAS EVIDENCIAS
-
-![Evidencias](img/img5.png)
-
-ARCHIVOS
-
-![Evidencias](img/img6.png)
-
-LOGS
-
-![Evidencias](img/img7.png)
-
-RED
-
-![Evidencias](img/img8.png)
-
-SISTEMA
-
-![Evidencias](img/img9.png)
-
-USUARIOS
-
-![Evidencias](img/img10.png)
+- **Identificación del sistema**: Crea perfil del sistema con detalles de hardware/SO  
+- **Información del sistema**: CPU, memoria, disco, kernel y variables de entorno  
+- **Análisis de procesos**: Procesos en ejecución, archivos abiertos, tareas cron  
+- **Información de usuarios**: Cuentas, sudoers, historial de acceso, historiales bash  
+- **Examen de servicios**: Servicios systemd, scripts init, servicios habilitados  
+- **Forense de red**: Interfaces, conexiones, reglas de firewall, DNS  
+- **Recolección de logs**: Logs del sistema, de autenticación y de aplicaciones  
+- **Análisis de archivos**: Archivos sospechosos, binarios SUID/SGID, archivos ocultos  
+- **Captura de memoria**: Volcado opcional de RAM (si hay herramientas disponibles)  
