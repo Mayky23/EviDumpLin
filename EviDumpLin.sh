@@ -2,13 +2,15 @@
 # ==============================================================================
 # EviDump - Recolección de Evidencias Forenses para Linux
 # ==============================================================================
-# Version: 2.0
+# Version: 3.0
 # Autor: MARH 
 
-set -e
+# Nota: no se usa "set -e". En una recolección forense un fallo aislado
+# (un proceso que termina, un archivo ilegible...) no debe detener la
+# adquisición completa; los errores relevantes se controlan explícitamente.
 
 # Variables globales
-VERSION="2.0"
+VERSION="3.0"
 LOG_FILE=""
 STARTED_AT=$(date +%s)
 SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
@@ -17,6 +19,9 @@ CASE_NAME=""
 VERBOSE=0
 AVAILABLE_SPACE=0
 REQUIRED_SPACE=500  # En MB, estimación conservadora
+USER_OUTPUT_DIR=""
+PROGRESS_ACTIVE=0
+FINISHED=0
 
 # Colores para output
 RED='\033[0;31m'
@@ -73,14 +78,15 @@ show_help() {
     echo "Ejemplos:"
     echo "  sudo $0 -c caso_incidente_123 -o /media/usb"
     echo "  sudo $0 --verbose"
-    exit 0
+    exit "${1:-0}"
 }
 
 # Función para registrar en el log
 log() {
     local level="$1"
     local message="$2"
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    local timestamp
+    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     
     # Si el log file está definido, escribir ahí
     if [ -n "$LOG_FILE" ]; then
@@ -88,7 +94,12 @@ log() {
     fi
     
     # En modo verbose, mostrar todos los mensajes
-    if [ $VERBOSE -eq 1 ] || [ "$level" != "DEBUG" ]; then
+    if [ "$VERBOSE" -eq 1 ] || [ "$level" != "DEBUG" ]; then
+        # Si hay una barra de progreso a medias, cerrar su línea primero
+        if [ "$PROGRESS_ACTIVE" -eq 1 ]; then
+            echo ""
+            PROGRESS_ACTIVE=0
+        fi
         case "$level" in
             INFO)
                 echo -e "${GREEN}[INFO]${NC} $message"
@@ -129,6 +140,9 @@ show_progress() {
     
     if [ "$current" -eq "$total" ]; then
         echo -e " ${GREEN}✓${NC}"
+        PROGRESS_ACTIVE=0
+    else
+        PROGRESS_ACTIVE=1
     fi
 }
 
@@ -144,24 +158,39 @@ parse_arguments() {
                 shift
                 ;;
             -c|--case)
+                if [ -z "$2" ]; then
+                    echo -e "${RED}Falta el valor para la opción $1${NC}"
+                    show_help 1
+                fi
                 CASE_NAME="$2"
                 shift 2
                 ;;
             -o|--output)
+                if [ -z "$2" ]; then
+                    echo -e "${RED}Falta el valor para la opción $1${NC}"
+                    show_help 1
+                fi
                 USER_OUTPUT_DIR="$2"
                 shift 2
                 ;;
             *)
                 echo -e "${RED}Opción desconocida: $1${NC}"
-                show_help
+                show_help 1
                 ;;
         esac
     done
+    
+    # Evitar que el nombre del caso altere la ruta de destino
+    if [ -n "$CASE_NAME" ] && ! [[ "$CASE_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo -e "${RED}Nombre de caso no válido: '$CASE_NAME'${NC}"
+        echo "Use solo letras, números, punto, guion y guion bajo."
+        exit 1
+    fi
 }
 
 # Función para verificar herramientas necesarias
 check_required_tools() {
-    local tools=("tar" "dd" "date" "find" "grep" "awk" "sed")
+    local tools=("tar" "date" "find" "grep" "awk" "sed" "sha256sum")
     local missing_tools=()
     
     log "INFO" "Verificando herramientas requeridas..."
@@ -181,14 +210,60 @@ check_required_tools() {
     fi
 }
 
+# Espacio libre en MB de la ruta indicada (-P evita que df parta la línea
+# cuando el nombre del dispositivo es largo, p. ej. LVM)
+get_free_space_mb() {
+    df -Pm "$1" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+# Pide una ruta al usuario hasta que sea válida y tenga espacio suficiente
+# (o el usuario acepte continuar). Deja el resultado en SELECTED_DIR.
+ask_directory() {
+    local prompt="$1"
+    local dir space_confirm
+    
+    while true; do
+        if ! read -r -p "$prompt" dir; then
+            echo ""
+            log "ERROR" "No se pudo leer la entrada del usuario"
+            exit 1
+        fi
+        
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            AVAILABLE_SPACE=$(get_free_space_mb "$dir")
+            AVAILABLE_SPACE=${AVAILABLE_SPACE:-0}
+            
+            if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+                log "WARNING" "Espacio disponible en $dir: ${AVAILABLE_SPACE}MB (recomendado: ${REQUIRED_SPACE}MB)"
+                read -r -p "¿Continuar de todos modos? (s/n): " space_confirm || space_confirm="n"
+                if [[ "$space_confirm" =~ ^[Ss]$ ]]; then
+                    SELECTED_DIR="$dir"
+                    return 0
+                fi
+            else
+                SELECTED_DIR="$dir"
+                return 0
+            fi
+        else
+            log "ERROR" "El directorio $dir no existe o no tiene permisos de escritura."
+        fi
+    done
+}
+
 # Función para comprobar y crear directorios
 setup_directories() {
     local base_dir=""
-    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
     
     if [ -n "$USER_OUTPUT_DIR" ]; then
         if [ -d "$USER_OUTPUT_DIR" ] && [ -w "$USER_OUTPUT_DIR" ]; then
             base_dir="$USER_OUTPUT_DIR"
+            AVAILABLE_SPACE=$(get_free_space_mb "$base_dir")
+            AVAILABLE_SPACE=${AVAILABLE_SPACE:-0}
+            if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+                log "WARNING" "Espacio disponible en $base_dir: ${AVAILABLE_SPACE}MB (recomendado: ${REQUIRED_SPACE}MB)"
+            fi
         else
             log "ERROR" "El directorio especificado no existe o no se puede escribir: $USER_OUTPUT_DIR"
             exit 1
@@ -203,72 +278,33 @@ setup_directories() {
         echo -e "${CYAN}${BOLD}||  3. Cancelar                           ||${NC}"
         echo -e "${CYAN}${BOLD}============================================${NC}"
         
-        local valid_choice=0
-        while [ $valid_choice -eq 0 ]; do
-            read -p "Ingrese el número de opción (1-3): " choice
+        local choice
+        while [ -z "$base_dir" ]; do
+            if ! read -r -p "Ingrese el número de opción (1-3): " choice; then
+                echo ""
+                log "ERROR" "No se pudo leer la entrada del usuario"
+                exit 1
+            fi
             
             case "$choice" in
                 1)
-                    # Mostrar dispositivos USB disponibles
+                    # Mostrar dispositivos USB disponibles (TRAN = bus de conexión del disco)
                     echo -e "\n${BOLD}Dispositivos USB detectados:${NC}"
-                    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "sd[a-z]|usb"
+                    local usb_disks=()
+                    read -r -a usb_disks <<< "$(lsblk -dno NAME,TRAN 2>/dev/null | awk '$2=="usb" {printf "/dev/%s ", $1}')"
+                    if [ ${#usb_disks[@]} -gt 0 ]; then
+                        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "${usb_disks[@]}" 2>/dev/null
+                    else
+                        echo "  (no se detectaron dispositivos USB; puede indicar el punto de montaje igualmente)"
+                    fi
                     
-                    # Solicitar punto de montaje
-                    local valid_mount=0
-                    while [ $valid_mount -eq 0 ]; do
-                        read -p "Ingrese el punto de montaje del USB (ej. /media/usb): " USB_MOUNT
-                        
-                        if [ -d "$USB_MOUNT" ] && [ -w "$USB_MOUNT" ]; then
-                            # Verificar espacio disponible
-                            AVAILABLE_SPACE=$(df -m "$USB_MOUNT" | awk 'NR==2 {print $4}')
-                            
-                            if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-                                log "WARNING" "Espacio disponible en $USB_MOUNT: ${AVAILABLE_SPACE}MB (recomendado: ${REQUIRED_SPACE}MB)"
-                                read -p "¿Continuar de todos modos? (s/n): " space_confirm
-                                
-                                if [[ "$space_confirm" =~ ^[Ss]$ ]]; then
-                                    base_dir="$USB_MOUNT"
-                                    valid_mount=1
-                                    valid_choice=1
-                                fi
-                            else
-                                base_dir="$USB_MOUNT"
-                                valid_mount=1
-                                valid_choice=1
-                            fi
-                        else
-                            log "ERROR" "El punto de montaje $USB_MOUNT no existe o no tiene permisos de escritura."
-                        fi
-                    done
+                    ask_directory "Ingrese el punto de montaje del USB (ej. /media/usb): "
+                    base_dir="$SELECTED_DIR"
                     ;;
                 2)
-                    # Directorio local
-                    local valid_dir=0
-                    while [ $valid_dir -eq 0 ]; do
-                        read -p "Ingrese la ruta del directorio local (ej. /tmp): " LOCAL_DIR
-                        
-                        if [ -d "$LOCAL_DIR" ] && [ -w "$LOCAL_DIR" ]; then
-                            # Verificar espacio disponible
-                            AVAILABLE_SPACE=$(df -m "$LOCAL_DIR" | awk 'NR==2 {print $4}')
-                            
-                            if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-                                log "WARNING" "Espacio disponible en $LOCAL_DIR: ${AVAILABLE_SPACE}MB (recomendado: ${REQUIRED_SPACE}MB)"
-                                read -p "¿Continuar de todos modos? (s/n): " space_confirm
-                                
-                                if [[ "$space_confirm" =~ ^[Ss]$ ]]; then
-                                    base_dir="$LOCAL_DIR"
-                                    valid_dir=1
-                                    valid_choice=1
-                                fi
-                            else
-                                base_dir="$LOCAL_DIR"
-                                valid_dir=1
-                                valid_choice=1
-                            fi
-                        else
-                            log "ERROR" "El directorio $LOCAL_DIR no existe o no tiene permisos de escritura."
-                        fi
-                    done
+                    log "WARNING" "Guardar las evidencias en el propio sistema investigado modifica el disco analizado"
+                    ask_directory "Ingrese la ruta del directorio local: "
+                    base_dir="$SELECTED_DIR"
                     ;;
                 3)
                     log "INFO" "Operación cancelada por el usuario"
@@ -281,7 +317,8 @@ setup_directories() {
         done
     fi
     
-    # Generar nombre del directorio de evidencias
+    # Generar nombre del directorio de evidencias (sin barra doble si base_dir es "/")
+    base_dir="${base_dir%/}"
     if [ -n "$CASE_NAME" ]; then
         EVIDENCE_DIR="${base_dir}/EviDump_${CASE_NAME}_${timestamp}"
     else
@@ -289,17 +326,17 @@ setup_directories() {
     fi
     
     # Crear directorios
-    mkdir -p "$EVIDENCE_DIR"/{logs,sistema,usuarios,red,archivos,memoria,cronologia,servicios,aplicaciones,dispositivos}
-    
-    # Verificar si se crearon correctamente
-    if [ ! -d "$EVIDENCE_DIR" ]; then
+    if ! mkdir -p "$EVIDENCE_DIR"/{logs,sistema,usuarios,red,archivos,memoria,cronologia,servicios,aplicaciones,dispositivos}; then
         log "ERROR" "No se pudo crear el directorio de evidencias: $EVIDENCE_DIR"
         exit 1
     fi
     
     # Configurar archivo de registro
     LOG_FILE="${EVIDENCE_DIR}/evidump.log"
-    touch "$LOG_FILE"
+    if ! touch "$LOG_FILE"; then
+        log "ERROR" "No se pudo crear el archivo de registro: $LOG_FILE"
+        exit 1
+    fi
     
     log "SUCCESS" "Directorio de evidencias creado: $EVIDENCE_DIR"
 }
@@ -351,14 +388,37 @@ run_and_save() {
     echo -e "\n\n" >> "${outfile}"
 }
 
+# Nombre de la distribución (PRETTY_NAME de /etc/os-release)
+get_os_name() {
+    local name
+    # shellcheck source=/dev/null
+    name=$( . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" )
+    echo "${name:-desconocido}"
+}
+
+# Lista "usuario:directorio_home" de todas las cuentas de /etc/passwd cuyo
+# directorio home existe (incluye root y homes fuera de /home)
+get_user_homes() {
+    local seen=" "
+    local user home
+    while IFS=: read -r user _ _ _ _ home _; do
+        [ -n "$home" ] && [ "$home" != "/" ] && [ -d "$home" ] || continue
+        # Evitar procesar dos veces el mismo directorio
+        case "$seen" in *" $home "*) continue ;; esac
+        seen="${seen}${home} "
+        echo "${user}:${home}"
+    done < /etc/passwd
+}
+
 # Función para generar un informe resumen
 generate_summary() {
     local summary_file="${EVIDENCE_DIR}/resumen_evidencias.txt"
-    local end_time=$(date +%s)
-    local duration=$((end_time - STARTED_AT))
-    local hostname=$(hostname 2>/dev/null || echo "desconocido")
-    local os_info=$(cat /etc/os-release 2>/dev/null | grep "PRETTY_NAME" | cut -d= -f2 | tr -d '"' || echo "desconocido")
-    local kernel=$(uname -r 2>/dev/null || echo "desconocido")
+    local end_time duration hostname os_info kernel
+    end_time=$(date +%s)
+    duration=$((end_time - STARTED_AT))
+    hostname=$(hostname 2>/dev/null || echo "desconocido")
+    os_info=$(get_os_name)
+    kernel=$(uname -r 2>/dev/null || echo "desconocido")
     
     # Generar resumen
     {
@@ -366,8 +426,8 @@ generate_summary() {
         echo "          RESUMEN DE LA RECOLECCIÓN DE EVIDENCIAS          "
         echo "==========================================================="
         echo ""
-        echo "FECHA Y HORA DE INICIO: $(date -d @$STARTED_AT "+%Y-%m-%d %H:%M:%S")"
-        echo "FECHA Y HORA DE FIN: $(date -d @$end_time "+%Y-%m-%d %H:%M:%S")"
+        echo "FECHA Y HORA DE INICIO: $(date -d "@$STARTED_AT" "+%Y-%m-%d %H:%M:%S %Z")"
+        echo "FECHA Y HORA DE FIN: $(date -d "@$end_time" "+%Y-%m-%d %H:%M:%S %Z")"
         echo "DURACIÓN: $((duration / 60)) minutos y $((duration % 60)) segundos"
         echo ""
         echo "INFORMACIÓN DEL SISTEMA:"
@@ -378,19 +438,20 @@ generate_summary() {
         echo "DIRECTORIO DE EVIDENCIAS: $EVIDENCE_DIR"
         echo ""
         echo "ESTRUCTURA DE DIRECTORIOS:"
-        find "$EVIDENCE_DIR" -type d | sort | sed 's|'$EVIDENCE_DIR'|.|' | sed 's/^/  /'
+        (cd "$EVIDENCE_DIR" && find . -type d | sort | sed 's/^/  /')
         echo ""
         echo "ARCHIVOS GENERADOS:"
         find "$EVIDENCE_DIR" -type f -name "*.txt" | wc -l | xargs echo "  - Archivos de texto:"
         find "$EVIDENCE_DIR" -type f -name "*.tar.gz" | wc -l | xargs echo "  - Archivos comprimidos:"
-        find "$EVIDENCE_DIR" -type f -name "*.bin" | wc -l | xargs echo "  - Archivos binarios:"
+        find "$EVIDENCE_DIR" -type f \( -name "*.bin" -o -name "*.lime" \) | wc -l | xargs echo "  - Volcados de memoria:"
         echo ""
         echo "TAMAÑO TOTAL DE EVIDENCIAS: $(du -sh "$EVIDENCE_DIR" | cut -f1)"
         echo ""
         echo "HASH SHA256 DE EVIDENCIAS CLAVE:"
-        for file in $(find "$EVIDENCE_DIR" -type f -name "*.tar.gz"); do
-            echo "  - $(basename "$file"): $(sha256sum "$file" | cut -d' ' -f1)"
-        done
+        find "$EVIDENCE_DIR" -type f \( -name "*.tar.gz" -o -name "*.bin" -o -name "*.lime" \) -print0 |
+            while IFS= read -r -d '' file; do
+                echo "  - ${file#"$EVIDENCE_DIR"/}: $(sha256sum "$file" | cut -d' ' -f1)"
+            done
         echo ""
         echo "==========================================================="
         echo "                 FIN DEL INFORME DE EVIDENCIAS             "
@@ -399,7 +460,7 @@ generate_summary() {
     
     # Calcular hash del resumen
     if command_exists "sha256sum"; then
-        sha256sum "$summary_file" > "${summary_file}.sha256"
+        (cd "$EVIDENCE_DIR" && sha256sum resumen_evidencias.txt > resumen_evidencias.txt.sha256)
     fi
     
     log "SUCCESS" "Resumen de evidencias generado: $summary_file"
@@ -416,13 +477,13 @@ generate_system_id() {
         echo ""
         echo "FECHA Y HORA: $(date)"
         echo "HOSTNAME: $(hostname 2>/dev/null || echo "N/A")"
-        echo "USUARIO EJECUTANDO SCRIPT: $(whoami)"
+        echo "USUARIO EJECUTANDO SCRIPT: $(whoami) (sesión original: ${SUDO_USER:-$(logname 2>/dev/null || echo "N/A")})"
         echo ""
         echo "INFORMACIÓN DEL SISTEMA:"
         echo "  - Kernel: $(uname -a 2>/dev/null || echo "N/A")"
         
         if [ -f "/etc/os-release" ]; then
-            echo "  - Distribución: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d= -f2 | tr -d '"')"
+            echo "  - Distribución: $(get_os_name)"
         fi
         
         echo "  - Arquitectura: $(uname -m 2>/dev/null || echo "N/A")"
@@ -446,7 +507,8 @@ generate_system_id() {
         echo ""
         echo "HASH SHA256 INICIAL DEL DIRECTORIO /bin:"
         if command_exists "find" && command_exists "sha256sum"; then
-            find /bin -type f -exec sha256sum {} \; 2>/dev/null | sort | sha256sum | cut -d' ' -f1
+            # "/bin/" con barra final: en las distros actuales /bin es un enlace a usr/bin
+            find /bin/ -type f -exec sha256sum {} + 2>/dev/null | sort | sha256sum | cut -d' ' -f1
         else
             echo "  [No se pudo calcular el hash]"
         fi
@@ -515,7 +577,8 @@ collect_system_info() {
     
     # Variables de entorno
     show_progress "Info Sistema" $((++current_cmd)) $total_cmds
-    run_and_save "env" "${EVIDENCE_DIR}/sistema/variables_entorno.txt" "Variables de entorno"
+    run_and_save "env; echo; echo '--- Entorno de PID 1 (init) ---'; tr '\\0' '\\n' < /proc/1/environ" \
+                "${EVIDENCE_DIR}/sistema/variables_entorno.txt" "Variables de entorno (del script y de PID 1)"
     
     log "SUCCESS" "Información del sistema recolectada"
 }
@@ -548,23 +611,32 @@ collect_process_info() {
     
     # Tareas cron
     show_progress "Procesos" $((++current_cmd)) $total_cmds
-    run_and_save "ls -la /etc/cron*" "${EVIDENCE_DIR}/cronologia/cron_directorios.txt" "Directorios de cron"
+    if compgen -G "/etc/cron*" > /dev/null; then
+        run_and_save "ls -la /etc/cron*" "${EVIDENCE_DIR}/cronologia/cron_directorios.txt" "Directorios de cron"
+    fi
     
     show_progress "Procesos" $((++current_cmd)) $total_cmds
-    run_and_save "find /etc/cron* -type f -exec cat {} \;" "${EVIDENCE_DIR}/cronologia/cron_trabajos.txt" "Trabajos de cron"
+    if compgen -G "/etc/cron*" > /dev/null; then
+        run_and_save "find /etc/cron* -type f -print -exec cat {} \;" "${EVIDENCE_DIR}/cronologia/cron_trabajos.txt" "Trabajos de cron"
+    fi
     
+    # Crontabs de todos los usuarios (incluido root), directamente desde el spool:
+    # Debian/Ubuntu usan /var/spool/cron/crontabs, RHEL/Fedora /var/spool/cron
     show_progress "Procesos" $((++current_cmd)) $total_cmds
-    run_and_save "crontab -l" "${EVIDENCE_DIR}/cronologia/crontab_root.txt" "Crontab del usuario root"
-    
-    # Buscar crontabs de usuarios
-    for user_home in /home/*; do
-        if [ -d "$user_home" ]; then
-            username=$(basename "$user_home")
-            if command_exists "crontab"; then
-                run_and_save "crontab -u $username -l" "${EVIDENCE_DIR}/cronologia/crontab_${username}.txt" "Crontab del usuario $username"
-            fi
+    local spool_dir
+    for spool_dir in /var/spool/cron/crontabs /var/spool/cron; do
+        if [ -d "$spool_dir" ]; then
+            run_and_save "ls -la $(printf '%q' "$spool_dir")" "${EVIDENCE_DIR}/cronologia/spool_listado.txt" "Listado del spool de cron"
+            mkdir -p "${EVIDENCE_DIR}/cronologia/spool"
+            find "$spool_dir" -maxdepth 1 -type f -exec cp -p {} "${EVIDENCE_DIR}/cronologia/spool/" \; 2>/dev/null
+            break
         fi
     done
+    
+    # Tareas programadas con at
+    if command_exists "atq"; then
+        run_and_save "atq" "${EVIDENCE_DIR}/cronologia/at_trabajos.txt" "Trabajos programados con at"
+    fi
     
     log "SUCCESS" "Información de procesos recolectada"
 }
@@ -589,7 +661,9 @@ collect_user_info() {
     run_and_save "cat /etc/sudoers" "${EVIDENCE_DIR}/usuarios/sudoers.txt" "Archivo sudoers"
     
     show_progress "Usuarios" $((++current_cmd)) $total_cmds
-    run_and_save "find /etc/sudoers.d -type f -exec cat {} \;" "${EVIDENCE_DIR}/usuarios/sudoers_adicional.txt" "Configuración adicional de sudoers"
+    if [ -d /etc/sudoers.d ]; then
+        run_and_save "find /etc/sudoers.d -type f -print -exec cat {} \;" "${EVIDENCE_DIR}/usuarios/sudoers_adicional.txt" "Configuración adicional de sudoers"
+    fi
     
     # Historial de login
     show_progress "Usuarios" $((++current_cmd)) $total_cmds
@@ -604,30 +678,25 @@ collect_user_info() {
     # Copiar .bash_history de usuarios
     log "INFO" "Copiando historial de comandos de usuarios..."
     
-    for user_home in /home/*; do
-        if [ -d "$user_home" ]; then
-            username=$(basename "$user_home")
-            if [ -f "${user_home}/.bash_history" ]; then
-                cp "${user_home}/.bash_history" "${EVIDENCE_DIR}/usuarios/bash_history_${username}.txt" 2>/dev/null
+    # Se recorren todas las cuentas de /etc/passwd (incluido root y homes fuera de /home)
+    local username user_home history_file
+    while IFS=: read -r username user_home; do
+        # Historiales de shell
+        for history_file in "${user_home}/.bash_history" "${user_home}/.zsh_history" "${user_home}/.history" "${user_home}/.sh_history"; do
+            if [ -f "$history_file" ]; then
+                cp -p "$history_file" "${EVIDENCE_DIR}/usuarios/$(basename "$history_file")_${username}.txt" 2>/dev/null ||
+                    log "WARNING" "No se pudo copiar $history_file"
             fi
-            
-            # Buscar archivos de historial adicionales
-            for history_file in "${user_home}/.zsh_history" "${user_home}/.history" "${user_home}/.sh_history"; do
-                if [ -f "$history_file" ]; then
-                    cp "$history_file" "${EVIDENCE_DIR}/usuarios/$(basename "$history_file")_${username}.txt" 2>/dev/null
-                fi
-            done
-        fi
-    done
-    
-    # Recolectar archivos ssh conocidos
-    for user_home in /home/*; do
-        if [ -d "$user_home/.ssh" ]; then
-            username=$(basename "$user_home")
+        done
+        
+        # Archivos SSH (claves, authorized_keys, known_hosts, config)
+        if [ -d "${user_home}/.ssh" ]; then
             mkdir -p "${EVIDENCE_DIR}/usuarios/ssh_${username}"
-            cp -r "${user_home}/.ssh/"* "${EVIDENCE_DIR}/usuarios/ssh_${username}/" 2>/dev/null
+            # "/." copia también los ocultos y no falla si la carpeta está vacía
+            cp -a "${user_home}/.ssh/." "${EVIDENCE_DIR}/usuarios/ssh_${username}/" 2>/dev/null ||
+                log "WARNING" "No se pudo copiar completamente ${user_home}/.ssh"
         fi
-    done
+    done < <(get_user_homes)
     
     log "SUCCESS" "Información de usuarios recolectada"
 }
@@ -651,7 +720,9 @@ collect_service_info() {
     
     # Servicios init.d (sistemas antiguos)
     show_progress "Servicios" $((++current_cmd)) $total_cmds
-    run_and_save "ls -la /etc/init.d/" "${EVIDENCE_DIR}/servicios/init_scripts.txt" "Scripts init.d"
+    if [ -d /etc/init.d ]; then
+        run_and_save "ls -la /etc/init.d/" "${EVIDENCE_DIR}/servicios/init_scripts.txt" "Scripts init.d"
+    fi
     
     # Targets y niveles de ejecución
     show_progress "Servicios" $((++current_cmd)) $total_cmds
@@ -680,8 +751,16 @@ collect_logs() {
     
     # Comprimir logs completos
     if command_exists "tar"; then
-        tar -czf "${EVIDENCE_DIR}/logs/logs_completos.tar.gz" -C / var/log 2>/dev/null || 
-        log "ERROR" "Error al comprimir los logs"
+        # Código 1 de GNU tar = "algún archivo cambió durante la lectura", habitual
+        # en logs activos: el archivo generado es válido, solo se avisa.
+        local tar_rc=0
+        tar -czf "${EVIDENCE_DIR}/logs/logs_completos.tar.gz" \
+            --exclude="${EVIDENCE_DIR#/}" -C / var/log 2>/dev/null || tar_rc=$?
+        if [ "$tar_rc" -eq 1 ]; then
+            log "WARNING" "Algunos logs cambiaron mientras se comprimían (normal en un sistema en ejecución)"
+        elif [ "$tar_rc" -gt 1 ]; then
+            log "ERROR" "Error al comprimir los logs (código $tar_rc)"
+        fi
     else
         cp -r /var/log/* "${EVIDENCE_DIR}/logs/" 2>/dev/null
     fi
@@ -784,10 +863,14 @@ collect_network_info() {
     
     # Información de hosts permitidos/denegados
     show_progress "Red" $((++current_cmd)) $total_cmds
-    run_and_save "cat /etc/hosts.allow 2>/dev/null" "${EVIDENCE_DIR}/red/hosts_allow.txt" "Hosts permitidos"
+    if [ -f /etc/hosts.allow ]; then
+        run_and_save "cat /etc/hosts.allow" "${EVIDENCE_DIR}/red/hosts_allow.txt" "Hosts permitidos"
+    fi
     
     show_progress "Red" $((++current_cmd)) $total_cmds
-    run_and_save "cat /etc/hosts.deny 2>/dev/null" "${EVIDENCE_DIR}/red/hosts_deny.txt" "Hosts denegados"
+    if [ -f /etc/hosts.deny ]; then
+        run_and_save "cat /etc/hosts.deny" "${EVIDENCE_DIR}/red/hosts_deny.txt" "Hosts denegados"
+    fi
     
     # Configuración de firewall
     show_progress "Red" $((++current_cmd)) $total_cmds
@@ -807,28 +890,38 @@ collect_network_info() {
 collect_suspicious_files() {
     log "INFO" "Buscando archivos sospechosos..."
     
+    # Excluir pseudo-sistemas de archivos, montajes de red y el propio directorio
+    # de evidencias (si no, la evidencia se incluye a sí misma). "|| true": find
+    # devuelve error por cualquier archivo ilegible o que desaparezca, y eso no
+    # invalida el resultado.
+    local prune
+    prune="\\( -path /proc -o -path /sys -o -path /run -o -path /dev -o -path $(printf '%q' "$EVIDENCE_DIR")"
+    prune+=" -o -fstype nfs -o -fstype nfs4 -o -fstype cifs -o -fstype smb3 -o -fstype fuse.sshfs \\) -prune -o"
+    
     # Buscar archivos SUID/SGID
-    run_and_save "find / -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null" \
+    run_and_save "find / $prune -type f \\( -perm -4000 -o -perm -2000 \\) -ls 2>/dev/null || true" \
                 "${EVIDENCE_DIR}/archivos/suid_sgid.txt" "Archivos con SUID/SGID" 300
     
     # Buscar archivos recientemente modificados
-    run_and_save "find / -type f -mtime -7 -not -path \"/proc/*\" -not -path \"/sys/*\" -not -path \"/run/*\" -ls 2>/dev/null" \
+    run_and_save "find / $prune -type f -mtime -7 -ls 2>/dev/null || true" \
                 "${EVIDENCE_DIR}/archivos/modificados_ultimos_7dias.txt" "Archivos modificados en los últimos 7 días" 300
     
     # Buscar archivos ocultos
-    run_and_save "find / -type f -name \".*\" -not -path \"/proc/*\" -not -path \"/sys/*\" -not -path \"/run/*\" -ls 2>/dev/null" \
+    run_and_save "find / $prune -type f -name '.*' -ls 2>/dev/null || true" \
                 "${EVIDENCE_DIR}/archivos/archivos_ocultos.txt" "Archivos ocultos" 300
     
-    # Buscar archivos en /tmp
-    run_and_save "find /tmp -type f -ls 2>/dev/null" \
-                "${EVIDENCE_DIR}/archivos/archivos_tmp.txt" "Archivos en /tmp" 60
+    # Buscar archivos en /tmp y /dev/shm (ubicaciones típicas de malware)
+    run_and_save "find /tmp /var/tmp /dev/shm $prune -type f -ls 2>/dev/null || true" \
+                "${EVIDENCE_DIR}/archivos/archivos_tmp.txt" "Archivos en /tmp, /var/tmp y /dev/shm" 60
     
     # Buscar archivos grandes
-    run_and_save "find / -type f -size +100M -not -path \"/proc/*\" -not -path \"/sys/*\" -not -path \"/run/*\" -ls 2>/dev/null" \
+    run_and_save "find / $prune -type f -size +100M -ls 2>/dev/null || true" \
                 "${EVIDENCE_DIR}/archivos/archivos_grandes.txt" "Archivos mayores a 100MB" 300
     
     # Archivos de inicio sospechosos
-    run_and_save "ls -la /etc/rc*.d/" "${EVIDENCE_DIR}/archivos/archivos_rc.txt" "Archivos rc.d"
+    if compgen -G "/etc/rc*.d" > /dev/null; then
+        run_and_save "ls -la /etc/rc*.d/" "${EVIDENCE_DIR}/archivos/archivos_rc.txt" "Archivos rc.d"
+    fi
     
     log "SUCCESS" "Búsqueda de archivos sospechosos completada"
 }
@@ -848,7 +941,9 @@ collect_device_info() {
     fi
     
     # Dispositivos SCSI/SATA
-    run_and_save "cat /proc/scsi/scsi 2>/dev/null" "${EVIDENCE_DIR}/dispositivos/scsi.txt" "Dispositivos SCSI"
+    if [ -f /proc/scsi/scsi ]; then
+        run_and_save "cat /proc/scsi/scsi" "${EVIDENCE_DIR}/dispositivos/scsi.txt" "Dispositivos SCSI"
+    fi
     
     # DMI/SMBIOS
     if command_exists "dmidecode"; then
@@ -893,120 +988,208 @@ collect_app_info() {
     log "SUCCESS" "Información de aplicaciones recolectada"
 }
 
-# Captura de memoria RAM (si volatility está disponible)
+# Captura de memoria RAM (AVML, LiME o /dev/fmem si están disponibles)
 collect_memory_image() {
     log "INFO" "Evaluando captura de memoria RAM..."
     
-    # Verificar si hay herramientas disponibles para captura de RAM
-    if command_exists "lime-forensics"; then
-        log "INFO" "lime-forensics encontrado, procediendo con captura de memoria..."
-        
-        # Para evitar fallos por espacio
-        if [ "$AVAILABLE_SPACE" -gt 4000 ]; then  # Necesita al menos 4GB
-            kernel_version=$(uname -r)
-            run_and_save "lime-forensics format=lime output=${EVIDENCE_DIR}/memoria/ram_dump.lime" \
-                        "${EVIDENCE_DIR}/memoria/lime_output.txt" "Captura de memoria con lime-forensics"
-        else
-            log "WARNING" "Espacio insuficiente para captura de memoria RAM"
-        fi
-    elif command_exists "fmem"; then
-        log "INFO" "fmem encontrado, procediendo con captura de memoria..."
-        
-        if [ "$AVAILABLE_SPACE" -gt 4000 ]; then  # Necesita al menos 4GB
-            run_and_save "dd if=/dev/fmem of=${EVIDENCE_DIR}/memoria/ram_dump.bin bs=1MB" \
-                        "${EVIDENCE_DIR}/memoria/fmem_output.txt" "Captura de memoria con fmem"
-        else
-            log "WARNING" "Espacio insuficiente para captura de memoria RAM"
-        fi
+    local mem_dir="${EVIDENCE_DIR}/memoria"
+    local mem_total_mb free_mb method="" lime_module="" candidate
+    
+    run_and_save "cat /proc/meminfo" "${mem_dir}/meminfo.txt" "Información de memoria"
+    
+    # Buscar una herramienta de captura. LiME y fmem son módulos del kernel, no
+    # comandos: el módulo de LiME se busca junto al script o entre los módulos
+    # instalados del kernel en ejecución.
+    if command_exists "avml"; then
+        method="avml"
     else
-        log "INFO" "No se encontraron herramientas para captura de memoria (lime-forensics o fmem)"
-        run_and_save "cat /proc/meminfo" "${EVIDENCE_DIR}/memoria/meminfo.txt" "Información de memoria"
+        for candidate in "$SCRIPT_PATH"/lime*.ko; do
+            if [ -f "$candidate" ]; then
+                lime_module="$candidate"
+                break
+            fi
+        done
+        if [ -z "$lime_module" ] && command_exists "modinfo"; then
+            lime_module=$(modinfo -n lime 2>/dev/null)
+        fi
+        
+        if [ -n "$lime_module" ] && command_exists "insmod"; then
+            method="lime"
+        elif [ -c /dev/fmem ]; then
+            method="fmem"
+        fi
+    fi
+    
+    if [ -z "$method" ]; then
+        log "INFO" "No se encontraron herramientas de captura de memoria (avml, módulo LiME o /dev/fmem)"
+    else
+        # Se necesita al menos el tamaño de la RAM más un 10% de margen
+        mem_total_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null)
+        mem_total_mb=${mem_total_mb:-0}
+        free_mb=$(get_free_space_mb "$EVIDENCE_DIR")
+        free_mb=${free_mb:-0}
+        
+        if [ "$free_mb" -le $((mem_total_mb + mem_total_mb / 10)) ]; then
+            log "WARNING" "Espacio insuficiente para la captura de RAM: ${free_mb}MB libres, RAM de ${mem_total_mb}MB"
+        else
+            log "INFO" "Capturando memoria RAM con ${method} (${mem_total_mb}MB), puede tardar varios minutos..."
+            # Timeout 0 = sin límite de tiempo: el volcado no debe cortarse a medias
+            case "$method" in
+                avml)
+                    run_and_save "avml $(printf '%q' "${mem_dir}/ram_dump.lime")" \
+                                "${mem_dir}/avml_output.txt" "Captura de memoria con AVML" 0
+                    ;;
+                lime)
+                    run_and_save "insmod $(printf '%q' "$lime_module") $(printf '%q' "path=${mem_dir}/ram_dump.lime format=lime")" \
+                                "${mem_dir}/lime_output.txt" "Captura de memoria con LiME ($lime_module)" 0
+                    rmmod lime 2>/dev/null
+                    ;;
+                fmem)
+                    run_and_save "dd if=/dev/fmem of=$(printf '%q' "${mem_dir}/ram_dump.bin") bs=1M count=${mem_total_mb}" \
+                                "${mem_dir}/fmem_output.txt" "Captura de memoria con fmem" 0
+                    ;;
+            esac
+        fi
     fi
     
     # Capturar información de /proc para análisis similar a volatility
     log "INFO" "Capturando información de /proc para análisis de memoria..."
     
     # Directorio temporal para estructura /proc
-    local proc_temp="${EVIDENCE_DIR}/memoria/proc_info"
+    local proc_temp="${mem_dir}/proc_info"
     mkdir -p "$proc_temp"
     
-    # Guardar mapas de memoria de procesos
+    # Guardar mapas de memoria de procesos. Un proceso puede terminar mientras
+    # se recorre la lista: en ese caso cp falla y simplemente se continúa.
+    local pid pid_num proc_file
     for pid in /proc/[0-9]*; do
         if [ -d "$pid" ]; then
-            pid_num=$(basename "$pid")
+            pid_num=${pid#/proc/}
             mkdir -p "${proc_temp}/${pid_num}"
-            cp "${pid}/maps" "${proc_temp}/${pid_num}/" 2>/dev/null
-            cp "${pid}/status" "${proc_temp}/${pid_num}/" 2>/dev/null
-            cp "${pid}/cmdline" "${proc_temp}/${pid_num}/" 2>/dev/null
-            cp "${pid}/environ" "${proc_temp}/${pid_num}/" 2>/dev/null
+            for proc_file in maps status cmdline environ; do
+                cp "${pid}/${proc_file}" "${proc_temp}/${pid_num}/" 2>/dev/null
+            done
+            # Ruta del ejecutable (permite detectar binarios borrados en uso)
+            readlink "${pid}/exe" > "${proc_temp}/${pid_num}/exe_link" 2>/dev/null
         fi
     done
     
     # Comprimir para ahorrar espacio
     if command_exists "tar"; then
-        tar -czf "${EVIDENCE_DIR}/memoria/proc_info.tar.gz" -C "${EVIDENCE_DIR}/memoria" proc_info
-        rm -rf "$proc_temp"
+        if tar -czf "${mem_dir}/proc_info.tar.gz" -C "$mem_dir" proc_info 2>/dev/null; then
+            rm -rf "$proc_temp"
+        else
+            log "WARNING" "No se pudo comprimir ${proc_temp}; se conserva sin comprimir"
+        fi
     fi
     
     log "SUCCESS" "Captura de información de memoria completada"
 }
 
 # Función de limpieza y finalización
+# $1 = "interrumpida" si se llama desde la captura de señales
 cleanup_and_finish() {
-    # Calcular hashes de todos los archivos recolectados
+    local status="${1:-completa}"
+    
+    # Calcular hashes de todos los archivos recolectados. Rutas relativas para
+    # poder verificarlos en otro equipo:  cd <dir> && sha256sum -c hashes_sha256.txt
+    # Se excluyen el propio archivo de hashes y el log (que aún se modifica);
+    # ambos se cubren al final en hashes_cierre.sha256.
     log "INFO" "Calculando hashes de archivos recolectados..."
     
+    local hash_file="${EVIDENCE_DIR}/hashes_sha256.txt"
+    local hash_tmp="${EVIDENCE_DIR}/.hashes_sha256.tmp"
+    
     if command_exists "sha256sum"; then
-        find "$EVIDENCE_DIR" -type f -not -name "*.sha256" | while read -r file; do
-            sha256sum "$file" >> "${EVIDENCE_DIR}/hashes_sha256.txt"
-        done
-        log "SUCCESS" "Hashes SHA256 calculados"
+        if (cd "$EVIDENCE_DIR" && find . -type f \
+                ! -name hashes_sha256.txt ! -name .hashes_sha256.tmp \
+                ! -name evidump.log ! -name hashes_cierre.sha256 -print0 |
+                sort -z | xargs -0 -r sha256sum) > "$hash_tmp" &&
+           mv "$hash_tmp" "$hash_file"; then
+            log "SUCCESS" "Hashes SHA256 calculados"
+        else
+            rm -f "$hash_tmp"
+            log "WARNING" "No se pudieron calcular todos los hashes SHA256"
+        fi
     else
         log "WARNING" "No se pudo calcular hashes SHA256 (sha256sum no disponible)"
     fi
     
-    # Permisos seguros
-    chmod -R 400 "$EVIDENCE_DIR"  # Solo lectura para el propietario
-    
     # Tiempo total
-    local end_time=$(date +%s)
-    local duration=$((end_time - STARTED_AT))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
+    local end_time duration minutes seconds
+    end_time=$(date +%s)
+    duration=$((end_time - STARTED_AT))
+    minutes=$((duration / 60))
+    seconds=$((duration % 60))
     
-    log "SUCCESS" "Recolección de evidencias completada en $minutes minutos y $seconds segundos"
+    log "SUCCESS" "Recolección de evidencias ${status} en $minutes minutos y $seconds segundos"
     log "SUCCESS" "Evidencias guardadas en: $EVIDENCE_DIR"
+    
+    # Solo lectura (u+rX mantiene el acceso a los directorios). En FAT32/exFAT
+    # no hay permisos Unix y chmod falla: se avisa y se continúa.
+    if ! chmod -R a-w,u+rX "$EVIDENCE_DIR" 2>/dev/null; then
+        log "WARNING" "No se pudieron aplicar permisos de solo lectura (¿sistema de archivos FAT/exFAT?)"
+    fi
+    
+    # Cerrar el log y sellar el log y el archivo de hashes
+    LOG_FILE=""
+    if command_exists "sha256sum"; then
+        (cd "$EVIDENCE_DIR" && sha256sum evidump.log hashes_sha256.txt > hashes_cierre.sha256 2>/dev/null)
+        chmod a-w "${EVIDENCE_DIR}/hashes_cierre.sha256" 2>/dev/null
+    fi
+    FINISHED=1
     
     # Mensaje final
     echo ""
-    echo -e "${GREEN}${BOLD}=======================================================${NC}"
-    echo -e "${GREEN}${BOLD}           RECOLECCIÓN FINALIZADA CON ÉXITO           ${NC}"
-    echo -e "${GREEN}${BOLD}=======================================================${NC}"
+    if [ "$status" = "interrumpida" ]; then
+        echo -e "${YELLOW}${BOLD}=======================================================${NC}"
+        echo -e "${YELLOW}${BOLD}      RECOLECCIÓN INTERRUMPIDA (EVIDENCIAS PARCIALES)  ${NC}"
+        echo -e "${YELLOW}${BOLD}=======================================================${NC}"
+    else
+        echo -e "${GREEN}${BOLD}=======================================================${NC}"
+        echo -e "${GREEN}${BOLD}           RECOLECCIÓN FINALIZADA CON ÉXITO           ${NC}"
+        echo -e "${GREEN}${BOLD}=======================================================${NC}"
+    fi
     echo ""
     echo -e "${BOLD}Tiempo Total:${NC} $minutes minutos y $seconds segundos"
     echo -e "${BOLD}Directorio de Evidencias:${NC} $EVIDENCE_DIR"
     echo ""
     echo -e "${YELLOW}NOTA:${NC} Asegúrese de mantener seguro el directorio de evidencias"
     echo -e "      para preservar la integridad de la información forense."
+    echo -e "      Verificación: cd \"$EVIDENCE_DIR\" && sha256sum -c hashes_sha256.txt"
     echo ""
+}
+
+# Si el usuario pulsa Ctrl+C o el proceso recibe SIGTERM, cerrar ordenadamente:
+# se generan el resumen y los hashes de lo recolectado hasta ese momento.
+on_interrupt() {
+    trap - INT TERM
+    echo ""
+    log "WARNING" "Recolección interrumpida; generando resumen y hashes de lo recolectado..."
+    if [ -n "$EVIDENCE_DIR" ] && [ -d "$EVIDENCE_DIR" ] && [ "$FINISHED" -eq 0 ]; then
+        generate_summary
+        cleanup_and_finish "interrumpida"
+    fi
+    exit 130
 }
 
 # Función principal
 main() {
-    # Mostrar banner
-    show_banner
+    # Parsear argumentos (antes de comprobar root, para que -h funcione sin sudo)
+    parse_arguments "$@"
     
     # Verificar privilegios
     check_root
     
-    # Parsear argumentos
-    parse_arguments "$@"
+    # Mostrar banner
+    show_banner
     
     # Verificar herramientas necesarias
     check_required_tools
     
     # Configurar directorios
     setup_directories
+    trap on_interrupt INT TERM
     
     # Generar identificación del sistema
     generate_system_id
