@@ -1,0 +1,394 @@
+===============================================================================
+  EviDumpLin v2.0 - REVISION DE CODIGO: ERRORES ENCONTRADOS Y PROPUESTAS
+===============================================================================
+Fecha de la revision : 2026-10-01
+Archivos revisados   : EviDumpLin.sh (~1030 lineas), README.md
+Metodo               : bash -n, shellcheck, pruebas aisladas de cada fallo y
+                       ejecucion completa del script como root
+                       (sobre una copia con saltos de linea LF).
+
+Leyenda:
+  [CRITICO] Impide que el script funcione o hace que se detenga.
+  [ALTO]    El script termina, pero las evidencias son incorrectas o incompletas.
+  [MEDIO]   Error de entrada, validacion o robustez.
+  [BAJO]    Calidad de codigo / avisos de shellcheck.
+  [DOC]     Error en la documentacion.
+  (V) = verificado con una prueba real.
+
+-------------------------------------------------------------------------------
+RESUMEN
+-------------------------------------------------------------------------------
+Tal como esta en el repositorio, el script NO funciona en Linux. Aunque se
+corrija el formato del archivo, la ejecucion completa se detiene sin ningun
+mensaje durante la captura de /proc, de modo que nunca genera el resumen
+(resumen_evidencias.txt), los hashes (hashes_sha256.txt) ni el mensaje final.
+
+  Criticos : 5
+  Altos    : 9
+  Medios   : 5
+  Bajos    : 9
+  Docs     : 3
+  TOTAL    : 31 errores
+
+===============================================================================
+PARTE 1 - ERRORES ENCONTRADOS
+===============================================================================
+
+----- CRITICOS ---------------------------------------------------------------
+
+[1] [CRITICO] (V) Saltos de linea de Windows (CRLF) en todo el archivo
+    Ubicacion : EviDumpLin.sh (todo el archivo)
+    Problema  : bash falla en la linea 7 ($'\r': command not found), en la 8
+                (set: -: invalid option) y en la 32 (syntax error near
+                unexpected token). El script no llega a arrancar.
+    Solucion  : Convertir a LF (dos2unix EviDumpLin.sh o sed -i 's/\r$//')
+                y anadir un .gitattributes con:  *.sh text eol=lf
+
+[2] [CRITICO] (V) El script se detiene sin avisar al copiar datos de /proc
+    Ubicacion : EviDumpLin.sh:934-943 (collect_memory_image)
+    Problema  : Con "set -e", la orden cp /proc/$pid/maps ... 2>/dev/null
+                falla si un proceso termina mientras se recorre la lista
+                (algo muy habitual), y eso aborta todo el script.
+                En la ejecucion de prueba termino con exit 1 justo ahi: no se
+                generaron ni el resumen, ni los hashes, ni el mensaje final.
+    Solucion  : Anadir "|| true" a cada cp, o copiar con
+                cat "$pid/maps" > destino 2>/dev/null || true
+
+[3] [CRITICO] (V) Un ~/.ssh vacio aborta el script
+    Ubicacion : EviDumpLin.sh:628
+    Problema  : cp -r "${user_home}/.ssh/"* ... Si la carpeta esta vacia, el
+                comodin * no encuentra nada, cp falla y set -e termina el
+                script.
+    Solucion  : cp -a "${user_home}/.ssh/." destino/ 2>/dev/null || true
+
+[4] [CRITICO] (V) La opcion USB termina el script si no hay discos sd*
+    Ubicacion : EviDumpLin.sh:214
+    Problema  : lsblk ... | grep -E "sd[a-z]|usb" devuelve 1 si no hay
+                coincidencias (NVMe, maquinas virtuales con vda...). Con set -e
+                el script termina al elegir la opcion 1.
+                Ademas, el filtro no detecta USB de verdad: tambien muestra los
+                discos SATA internos.
+    Solucion  : lsblk -o NAME,SIZE,TYPE,TRAN,MOUNTPOINT | grep -i usb || \
+                  echo "(no se detectaron dispositivos USB)"
+
+[5] [CRITICO] chmod -R 400 falla en memorias USB FAT32/exFAT
+    Ubicacion : EviDumpLin.sh:969
+    Problema  : En FAT32/exFAT (el formato mas comun en memorias USB, que es el
+                caso de uso principal) chmod devuelve error y set -e termina el
+                script justo al final. Ademas, poner 400 a los directorios les
+                quita el permiso de ejecucion (x): un usuario que no sea root
+                no puede entrar en ellos.
+    Solucion  : chmod -R a-w,u+rX "$EVIDENCE_DIR" 2>/dev/null || \
+                  log "WARNING" "No se pudieron ajustar los permisos"
+
+----- ALTOS (evidencias incorrectas o incompletas) ---------------------------
+
+[6] [ALTO] (V) El hash de /bin es siempre el de una entrada vacia
+    Ubicacion : EviDumpLin.sh:449
+    Problema  : En las distribuciones actuales /bin es un enlace a usr/bin.
+                "find /bin" no sigue el enlace, no encuentra ningun archivo y
+                el hash resultante siempre es
+                e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                (el SHA256 de una entrada vacia).
+    Solucion  : Usar "find /bin/ ..." o "find -L /bin ...".
+
+[7] [ALTO] La captura de RAM no puede funcionar
+    Ubicacion : EviDumpLin.sh:897-924
+    Problemas :
+      a) "lime-forensics" y "fmem" no son comandos sino modulos del kernel,
+         asi que command_exists nunca los encuentra.
+      b) El volcado con dd pasa por run_and_save con el limite por defecto de
+         60 s, asi que se cortaria a medias.
+      c) Al usar -o, AVAILABLE_SPACE queda en 0 (solo se calcula en el menu
+         interactivo), por lo que la captura siempre se salta.
+      d) El umbral de 4000 MB no tiene relacion con la RAM real del equipo.
+      e) dd sobre /dev/fmem sin "count" no tiene un limite definido.
+    Solucion  : Buscar el modulo (lime.ko / modinfo lime) y cargarlo con
+                  insmod lime.ko "path=$DEST format=lime"
+                o usar AVML (binario estatico de Microsoft). Comparar el
+                espacio libre con MemTotal de /proc/meminfo, calcular
+                AVAILABLE_SPACE tambien con -o y no aplicar timeout al volcado.
+
+[8] [ALTO] hashes_sha256.txt no se puede verificar despues
+    Ubicacion : EviDumpLin.sh:960-961
+    Problemas :
+      a) find encuentra hashes_sha256.txt mientras se esta escribiendo y
+         calcula el hash de si mismo a medias.
+      b) evidump.log se sigue modificando despues (lineas 963, 977, 978), asi
+         que su hash tampoco cuadra.
+      c) Las rutas son absolutas, asi que la verificacion falla al montar la
+         evidencia en otro equipo.
+    Solucion  : (cd "$EVIDENCE_DIR" && find . -type f \
+                   ! -name hashes_sha256.txt ! -name evidump.log \
+                   -exec sha256sum {} + > /tmp/h && mv /tmp/h hashes_sha256.txt)
+                y calcular el hash del log aparte, al final, en un .sha256.
+
+[9] [ALTO] (V) Los find / se recorren a si mismos y al USB de destino
+    Ubicacion : EviDumpLin.sh:811-828
+    Problema  : No usan -xdev ni excluyen $EVIDENCE_DIR. Recorren el USB de
+                destino y los montajes de red, y la evidencia se incluye a si
+                misma (59 entradas propias en modificados_ultimos_7dias.txt en
+                la prueba). Tambien puede tardar mucho con montajes de red.
+    Solucion  : Anadir -xdev (o -fstype nfs -prune) y
+                -path "$EVIDENCE_DIR" -prune -o ...
+
+[10] [ALTO] Solo se revisa /home/*: se pierde root
+    Ubicacion : EviDumpLin.sh:560, 607, 624
+    Problema  : No se recogen el historial, .ssh ni la crontab de root
+                (/root), ni los usuarios con su carpeta en otra ruta
+                (/var/www, /srv...). Ademas, el nombre de la carpeta en /home
+                no tiene por que ser el nombre de usuario (crontab -u falla).
+    Solucion  : Recorrer /etc/passwd:
+                  while IFS=: read -r user _ uid _ _ home shell; do ... done
+                y para las crontab usar /var/spool/cron/crontabs/* o
+                /var/spool/cron/*.
+
+[11] [ALTO] df -m sin -P devuelve datos incorrectos
+    Ubicacion : EviDumpLin.sh:223, 252
+    Problema  : Con nombres de dispositivo largos (LVM, /dev/mapper/...) la
+                salida de df ocupa dos lineas, $4 de la linea 2 sale mal y la
+                comparacion numerica falla ("integer expression expected").
+    Solucion  : df -Pm "$DIR" | awk 'NR==2 {print $4}'
+
+[12] [ALTO] ERROR falso al comprimir /var/log
+    Ubicacion : EviDumpLin.sh:683
+    Problema  : tar devuelve 1 con el aviso "file changed as we read it", que es
+                normal en logs activos, y el script registra un ERROR aunque el
+                archivo .tar.gz es valido. Si el destino esta dentro de
+                /var/log, el archivo se incluye a si mismo.
+    Solucion  : Tratar el codigo 1 como aviso (rc=0; tar ... || rc=$?;
+                [ $rc -gt 1 ] && log ERROR) y anadir
+                --exclude="$EVIDENCE_DIR" y --warning=no-file-changed.
+
+[13] [ALTO] (V) "find / ... 2>/dev/null" se marca como ERROR
+    Ubicacion : EviDumpLin.sh:811-828 en combinacion con run_and_save
+    Problema  : find devuelve un codigo distinto de 0 por permisos o por
+                archivos que desaparecen, y todos esos ficheros acaban con
+                "ERROR: El comando fallo" aunque la salida sea valida.
+    Solucion  : Anadir "|| true" en estos comandos o un parametro en
+                run_and_save para ignorar ciertos codigos de salida.
+
+[14] [ALTO] env guarda un entorno enganoso
+    Ubicacion : EviDumpLin.sh:518
+    Problema  : Guarda el entorno de sudo y del script, no el del sistema.
+    Solucion  : Guardar tambien /proc/1/environ y el environ de cada proceso
+                (que ya se copia en memoria/proc_info) y renombrar el archivo
+                a "entorno_script.txt" para que no confunda.
+
+----- MEDIOS (argumentos y entrada) ------------------------------------------
+
+[15] [MEDIO] -h exige root y se borra la pantalla antes
+    Ubicacion : EviDumpLin.sh:997-1003
+    Problema  : check_root se ejecuta antes de leer los argumentos, asi que
+                -h exige root. Antes de eso, clear borra la pantalla.
+    Solucion  : Llamar a parse_arguments antes de show_banner y check_root.
+
+[16] [MEDIO] Una opcion desconocida termina con codigo 0
+    Ubicacion : EviDumpLin.sh:154-156
+    Problema  : show_help hace exit 0, asi que un error de uso se considera
+                exito.
+    Solucion  : show_help() { ...; exit "${1:-0}"; } y llamar show_help 1.
+
+[17] [MEDIO] (V) -c u -o sin valor terminan el script sin mensaje
+    Ubicacion : EviDumpLin.sh:148, 152
+    Problema  : shift 2 falla con un solo argumento y set -e termina el script
+                sin explicar el error.
+    Solucion  : [ -n "$2" ] || { echo "Falta valor para $1"; show_help 1; }
+
+[18] [MEDIO] CASE_NAME no se valida
+    Problema  : Valores como "../", "/" o con espacios cambian la ruta de
+                destino o generan rutas no deseadas.
+    Solucion  : [[ "$CASE_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || error
+
+[19] [MEDIO] read -p sin -r
+    Ubicacion : EviDumpLin.sh:208, 219, 227, 248, 256
+    Problema  : Las barras invertidas se pierden (shellcheck SC2162). Si stdin
+                no es interactivo (EOF), read devuelve 1 y set -e termina el
+                script.
+    Solucion  : read -r -p ... || exit 1
+
+----- BAJOS (calidad / shellcheck) -------------------------------------------
+
+[20] [BAJO] (V) El || echo "desconocido" nunca se ejecuta
+    Ubicacion : EviDumpLin.sh:360
+    Problema  : El codigo de la tuberia es el de tr, que siempre funciona, asi
+                que se obtiene una cadena vacia en lugar de "desconocido".
+    Solucion  : os_info=$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")
+                os_info=${os_info:-desconocido}
+
+[21] [BAJO] Ruta sin comillas dentro de sed
+    Ubicacion : EviDumpLin.sh:381
+    Problema  : Se rompe con espacios o con "|" en la ruta. Rutas como
+                "/media/usuario/MI USB" son habituales.
+    Solucion  : (cd "$EVIDENCE_DIR" && find . -type d | sort)
+
+[22] [BAJO] for file in $(find ...) se rompe con espacios
+    Ubicacion : EviDumpLin.sh:391 (SC2044)
+    Solucion  : find ... -print0 | while IFS= read -r -d '' file; do ...
+
+[23] [BAJO] while read -r sin IFS=
+    Ubicacion : EviDumpLin.sh:960
+    Problema  : Recorta los espacios iniciales y finales de los nombres.
+    Solucion  : while IFS= read -r file (o, mejor, find -exec sha256sum {} +)
+
+[24] [BAJO] Variables sin usar
+    Ubicacion : SCRIPT_PATH (linea 14), kernel_version (linea 906) (SC2034)
+                dd aparece como herramienta requerida pero solo se usa con
+                fmem.
+
+[25] [BAJO] local var=$(...) oculta los codigos de salida
+    Ubicacion : Lineas 83, 187, 357-361, 972 (SC2155)
+    Solucion  : local var; var=$(...)
+
+[26] [BAJO] El resumen no cuenta el volcado de LiME
+    Ubicacion : EviDumpLin.sh:386
+    Problema  : Solo cuenta *.bin; el volcado de LiME seria .lime.
+
+[27] [BAJO] Barra de progreso mezclada con los mensajes
+    Problema  : show_progress escribe con \r sin salto de linea, y los
+                mensajes de log se imprimen en la misma linea.
+
+[28] [BAJO] Comprobaciones incoherentes
+    Ubicacion : EviDumpLin.sh:551, 557 frente a 563
+    Problema  : "ls /etc/cron*" y "crontab -l" no comprueban si existen; la
+                linea 563 si lo hace. No rompe nada, pero es incoherente.
+                Ademas, en sistemas con /etc/sudoers.d inexistente o sin
+                /etc/init.d se generan archivos de "ERROR".
+
+----- DOCUMENTACION (README.md) ----------------------------------------------
+
+[29] [DOC] El README promete captura de RAM con "lime-forensics/fmem", que no
+     funciona (ver punto 7).
+
+[30] [DOC] El esquema del directorio de evidencias no esta dentro de un bloque
+     de codigo (```), asi que GitHub lo muestra en una sola linea. Ademas le
+     faltan identificacion_sistema.txt y resumen_evidencias.txt.sha256.
+
+[31] [DOC] La tabla de opciones muestra "./EviDumpLin.sh -h" sin sudo, pero el
+     script exige root antes de leer las opciones (ver punto 15).
+
+===============================================================================
+PARTE 2 - PROPUESTAS DE MEJORA
+===============================================================================
+
+----- A. Robustez del script -------------------------------------------------
+
+[M1] Sustituir "set -e" por un control explicito de errores.
+     En un script de recoleccion forense, un solo fallo no deberia detener la
+     adquisicion entera. Propuesta: quitar set -e, anadir "set -o pipefail" y
+     comprobar los errores donde importan (creacion del directorio, escritura
+     en el destino). Como minimo, anadir un trap:
+       trap 'log ERROR "Fallo en linea $LINENO: $BASH_COMMAND"' ERR
+     para que nunca vuelva a terminar sin mensaje.
+
+[M2] Anadir un trap EXIT/INT que, aunque el script se interrumpa (Ctrl+C,
+     error), genere siempre el resumen y los hashes de lo recogido hasta ese
+     momento.
+
+[M3] Anadir .gitattributes (*.sh text eol=lf) para que no vuelva a subirse
+     con CRLF, y un .editorconfig.
+
+[M4] Anadir un flujo de GitHub Actions que ejecute "bash -n" y "shellcheck"
+     en cada push y pull request.
+
+[M5] Separar el modo interactivo del no interactivo: anadir -y/--yes para
+     ejecuciones automaticas sin preguntas (respuesta de incidentes remota,
+     Ansible, etc.).
+
+----- B. Calidad forense -----------------------------------------------------
+
+[M6] Seguir el orden de volatilidad (RFC 3227): capturar primero RAM,
+     procesos, conexiones de red y usuarios conectados, y dejar para el final
+     los logs y los find / (que son lentos y menos volatiles). Ahora la RAM
+     se intenta en ultimo lugar.
+
+[M7] Captura de RAM real: soporte para AVML (binario estatico, no requiere
+     compilar un modulo) y para LiME con insmod, comprobando el espacio
+     frente a MemTotal.
+
+[M8] Minimizar la huella en el sistema investigado:
+       - Advertir (o impedir) cuando el destino esta en el mismo disco que se
+         investiga (por ejemplo /tmp).
+       - Evitar que los find / modifiquen los tiempos de acceso cuando sea
+         posible y documentarlo.
+       - Ejecutar con nice/ionice para no afectar a un servidor en produccion.
+
+[M9] Cadena de custodia: registrar en el resumen el nombre del investigador
+     (opcion -i/--investigador), el numero de caso, la hora UTC y la
+     diferencia con NTP, el hash del propio script y la version de la
+     herramienta.
+
+[M10] Usar UTC en todas las marcas de tiempo (date -u) para evitar
+      ambiguedades por zona horaria.
+
+[M11] Hashes relativos y verificables: generar hashes_sha256.txt con rutas
+      relativas y anadir un modo --verify que ejecute
+        sha256sum -c hashes_sha256.txt
+      Opcionalmente, empaquetar todo en un .tar.gz final con su propio hash.
+
+[M12] Cifrar la salida (opcion --encrypt con gpg o age), ya que contiene
+      /etc/shadow y claves privadas SSH.
+
+----- C. Ampliar la recoleccion ----------------------------------------------
+
+[M13] Persistencia: systemd timers (systemctl list-timers --all), unidades
+      en /etc/systemd/system y ~/.config/systemd/user, /etc/rc.local,
+      /etc/profile.d, ~/.bashrc, ~/.profile, /etc/ld.so.preload,
+      authorized_keys de todos los usuarios, at jobs (atq), /etc/xdg/autostart.
+
+[M14] Procesos: ejecutables borrados en uso
+        ls -l /proc/*/exe 2>/dev/null | grep deleted
+      hash de /proc/*/exe, sockets por proceso (ss -tunap) y lineas de
+      comandos completas.
+
+[M15] Integridad de paquetes: dpkg --verify / debsums o rpm -Va para
+      detectar binarios del sistema modificados.
+
+[M16] Contenedores y virtualizacion: docker ps -a, podman ps -a,
+      docker inspect, kubectl (si existe).
+
+[M17] Usuarios: /etc/shadow con fechas de cambio de contrasena (chage -l),
+      UID 0 duplicados (awk -F: '$3==0' /etc/passwd), historiales de root
+      y de usuarios fuera de /home, faillog / lastb (logins fallidos).
+
+[M18] Red: nftables (nft list ruleset), iptables -t nat/mangle,
+      ip6tables, firewalld (firewall-cmd --list-all), wireguard (wg show),
+      tablas de rutas adicionales (ip rule).
+
+[M19] Kernel: dmesg, modulos sin firmar o ocultos (comparar lsmod con
+      /sys/module), sysctl -a.
+
+----- D. Usabilidad ----------------------------------------------------------
+
+[M20] Opcion --modulos para elegir que secciones ejecutar
+      (ej. --modulos sistema,red,logs) y --rapido para saltar los find /.
+
+[M21] Opcion --no-color y deteccion automatica cuando la salida no es una
+      terminal ([ -t 1 ]), para que los logs no tengan codigos ANSI.
+
+[M22] Barra de progreso global (por seccion) que no se mezcle con los
+      mensajes, o desactivarla en modo -v.
+
+[M23] Informe final en HTML o JSON ademas de TXT, para facilitar su lectura
+      e integracion con otras herramientas (Timesketch, ELK...).
+
+----- E. Documentacion -------------------------------------------------------
+
+[M24] Corregir el README (puntos 29-31): bloque de codigo para el arbol,
+      archivos reales generados y requisitos reales de la captura de RAM.
+
+[M25] Anadir al README: requisitos opcionales (lsof, dmidecode, AVML...),
+      un ejemplo del resumen generado, como verificar los hashes y
+      advertencias legales y de buenas practicas forenses.
+
+[M26] Anadir un CHANGELOG y un archivo LICENSE.
+
+===============================================================================
+PRIORIDAD RECOMENDADA
+===============================================================================
+  1. Errores 1 y 2 (sin ellos el script no funciona ni termina).
+  2. Errores 3, 4, 5 y la mejora M1/M2 (que nunca termine sin mensaje).
+  3. Errores 6, 8, 9, 10 (integridad y completitud de las evidencias).
+  4. Error 7 + mejora M7 (captura de RAM real).
+  5. Resto de errores, documentacion y mejoras.
+===============================================================================
