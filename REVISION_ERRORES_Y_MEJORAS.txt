@@ -16,6 +16,32 @@ Leyenda:
   (V) = verificado con una prueba real.
 
 -------------------------------------------------------------------------------
+ESTADO DE LAS CORRECCIONES (actualizado 2026-10-01)
+-------------------------------------------------------------------------------
+  CORREGIDOS: los 31 errores (1-31).
+  MEJORAS APLICADAS:
+    M1  - Eliminado "set -e"; los errores importantes se controlan uno a uno.
+    M2  - Ctrl+C / SIGTERM genera igualmente el resumen y los hashes.
+    M3  - .gitattributes (*.sh text eol=lf).
+    M7  - Captura de RAM con AVML, LiME (insmod) o /dev/fmem.
+    M11 - Hashes con rutas relativas + hashes_cierre.sha256 para el log
+          y el propio archivo de hashes.
+    M24 - README corregido.
+    Parcial: M13 (se recogen trabajos "at" y el spool de cron),
+             M14 (se guarda el enlace /proc/PID/exe de cada proceso).
+  PENDIENTES: resto de mejoras (M4-M6, M8-M10, M12, M15-M23, M25, M26).
+
+  Verificacion realizada tras las correcciones:
+    - shellcheck: 0 avisos.
+    - Ejecucion completa como root: termina con exito (exit 0), tambien
+      con espacios en la ruta de destino.
+    - sha256sum -c hashes_sha256.txt y hashes_cierre.sha256: todo OK.
+    - Hash de /bin: ya no es el de una entrada vacia.
+    - Modo interactivo (opciones 1 y 2), entrada cerrada (EOF),
+      argumentos invalidos e interrupcion con SIGTERM: comportamiento
+      correcto.
+
+-------------------------------------------------------------------------------
 RESUMEN
 -------------------------------------------------------------------------------
 Tal como esta en el repositorio, el script NO funciona en Linux. Aunque se
