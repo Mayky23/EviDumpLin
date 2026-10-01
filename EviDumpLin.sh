@@ -16,10 +16,8 @@ STARTED_AT=$(date +%s)
 SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
 EVIDENCE_DIR=""
 CASE_NAME=""
-VERBOSE=0
 AVAILABLE_SPACE=0
 REQUIRED_SPACE=500  # En MB, estimación conservadora
-USER_OUTPUT_DIR=""
 PROGRESS_ACTIVE=0
 FINISHED=0
 
@@ -65,22 +63,6 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Función para mostrar ayuda
-show_help() {
-    echo -e "${BOLD}USO:${NC} sudo $0 [opciones]"
-    echo ""
-    echo "Opciones:"
-    echo "  -h, --help          Muestra esta ayuda"
-    echo "  -v, --verbose       Modo verboso"
-    echo "  -c, --case NAME     Definir nombre del caso"
-    echo "  -o, --output DIR    Directorio de salida específico"
-    echo ""
-    echo "Ejemplos:"
-    echo "  sudo $0 -c caso_incidente_123 -o /media/usb"
-    echo "  sudo $0 --verbose"
-    exit "${1:-0}"
-}
-
 # Función para registrar en el log
 log() {
     local level="$1"
@@ -93,8 +75,8 @@ log() {
         echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
     fi
     
-    # En modo verbose, mostrar todos los mensajes
-    if [ "$VERBOSE" -eq 1 ] || [ "$level" != "DEBUG" ]; then
+    # Los mensajes DEBUG solo se guardan en el archivo de log
+    if [ "$level" != "DEBUG" ]; then
         # Si hay una barra de progreso a medias, cerrar su línea primero
         if [ "$PROGRESS_ACTIVE" -eq 1 ]; then
             echo ""
@@ -146,46 +128,21 @@ show_progress() {
     fi
 }
 
-# Función para parsear argumentos
-parse_arguments() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -h|--help)
-                show_help
-                ;;
-            -v|--verbose)
-                VERBOSE=1
-                shift
-                ;;
-            -c|--case)
-                if [ -z "$2" ]; then
-                    echo -e "${RED}Falta el valor para la opción $1${NC}"
-                    show_help 1
-                fi
-                CASE_NAME="$2"
-                shift 2
-                ;;
-            -o|--output)
-                if [ -z "$2" ]; then
-                    echo -e "${RED}Falta el valor para la opción $1${NC}"
-                    show_help 1
-                fi
-                USER_OUTPUT_DIR="$2"
-                shift 2
-                ;;
-            *)
-                echo -e "${RED}Opción desconocida: $1${NC}"
-                show_help 1
-                ;;
-        esac
+# Solicitar el nombre del caso (opcional)
+ask_case_name() {
+    while true; do
+        if ! read -r -p "Nombre del caso (Enter para omitir): " CASE_NAME; then
+            echo ""
+            log "ERROR" "No se pudo leer la entrada del usuario"
+            exit 1
+        fi
+        
+        # Evitar que el nombre del caso altere la ruta de destino
+        if [ -z "$CASE_NAME" ] || [[ "$CASE_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            return 0
+        fi
+        log "ERROR" "Nombre de caso no válido. Use solo letras, números, punto, guion y guion bajo."
     done
-    
-    # Evitar que el nombre del caso altere la ruta de destino
-    if [ -n "$CASE_NAME" ] && ! [[ "$CASE_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
-        echo -e "${RED}Nombre de caso no válido: '$CASE_NAME'${NC}"
-        echo "Use solo letras, números, punto, guion y guion bajo."
-        exit 1
-    fi
 }
 
 # Función para verificar herramientas necesarias
@@ -256,66 +213,52 @@ setup_directories() {
     local timestamp
     timestamp=$(date +%Y%m%d_%H%M%S)
     
-    if [ -n "$USER_OUTPUT_DIR" ]; then
-        if [ -d "$USER_OUTPUT_DIR" ] && [ -w "$USER_OUTPUT_DIR" ]; then
-            base_dir="$USER_OUTPUT_DIR"
-            AVAILABLE_SPACE=$(get_free_space_mb "$base_dir")
-            AVAILABLE_SPACE=${AVAILABLE_SPACE:-0}
-            if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-                log "WARNING" "Espacio disponible en $base_dir: ${AVAILABLE_SPACE}MB (recomendado: ${REQUIRED_SPACE}MB)"
-            fi
-        else
-            log "ERROR" "El directorio especificado no existe o no se puede escribir: $USER_OUTPUT_DIR"
+    # Solicitar al usuario la ubicación para guardar las evidencias
+    echo -e "${CYAN}${BOLD}============================================${NC}"
+    echo -e "${CYAN}${BOLD}||  ¿Dónde desea guardar las evidencias?  ||${NC}"
+    echo -e "${CYAN}${BOLD}||                                        ||${NC}"
+    echo -e "${CYAN}${BOLD}||  1. En un dispositivo USB              ||${NC}"
+    echo -e "${CYAN}${BOLD}||  2. En un directorio local             ||${NC}"
+    echo -e "${CYAN}${BOLD}||  3. Cancelar                           ||${NC}"
+    echo -e "${CYAN}${BOLD}============================================${NC}"
+    
+    local choice
+    while [ -z "$base_dir" ]; do
+        if ! read -r -p "Ingrese el número de opción (1-3): " choice; then
+            echo ""
+            log "ERROR" "No se pudo leer la entrada del usuario"
             exit 1
         fi
-    else
-        # Solicitar al usuario la ubicación para guardar las evidencias
-        echo -e "${CYAN}${BOLD}============================================${NC}"
-        echo -e "${CYAN}${BOLD}||  ¿Dónde desea guardar las evidencias?  ||${NC}"
-        echo -e "${CYAN}${BOLD}||                                        ||${NC}"
-        echo -e "${CYAN}${BOLD}||  1. En un dispositivo USB              ||${NC}"
-        echo -e "${CYAN}${BOLD}||  2. En un directorio local             ||${NC}"
-        echo -e "${CYAN}${BOLD}||  3. Cancelar                           ||${NC}"
-        echo -e "${CYAN}${BOLD}============================================${NC}"
         
-        local choice
-        while [ -z "$base_dir" ]; do
-            if ! read -r -p "Ingrese el número de opción (1-3): " choice; then
-                echo ""
-                log "ERROR" "No se pudo leer la entrada del usuario"
-                exit 1
-            fi
-            
-            case "$choice" in
-                1)
-                    # Mostrar dispositivos USB disponibles (TRAN = bus de conexión del disco)
-                    echo -e "\n${BOLD}Dispositivos USB detectados:${NC}"
-                    local usb_disks=()
-                    read -r -a usb_disks <<< "$(lsblk -dno NAME,TRAN 2>/dev/null | awk '$2=="usb" {printf "/dev/%s ", $1}')"
-                    if [ ${#usb_disks[@]} -gt 0 ]; then
-                        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "${usb_disks[@]}" 2>/dev/null
-                    else
-                        echo "  (no se detectaron dispositivos USB; puede indicar el punto de montaje igualmente)"
-                    fi
-                    
-                    ask_directory "Ingrese el punto de montaje del USB (ej. /media/usb): "
-                    base_dir="$SELECTED_DIR"
-                    ;;
-                2)
-                    log "WARNING" "Guardar las evidencias en el propio sistema investigado modifica el disco analizado"
-                    ask_directory "Ingrese la ruta del directorio local: "
-                    base_dir="$SELECTED_DIR"
-                    ;;
-                3)
-                    log "INFO" "Operación cancelada por el usuario"
-                    exit 0
-                    ;;
-                *)
-                    log "ERROR" "Opción no válida. Por favor, seleccione 1, 2 o 3."
-                    ;;
-            esac
-        done
-    fi
+        case "$choice" in
+            1)
+                # Mostrar dispositivos USB disponibles (TRAN = bus de conexión del disco)
+                echo -e "\n${BOLD}Dispositivos USB detectados:${NC}"
+                local usb_disks=()
+                read -r -a usb_disks <<< "$(lsblk -dno NAME,TRAN 2>/dev/null | awk '$2=="usb" {printf "/dev/%s ", $1}')"
+                if [ ${#usb_disks[@]} -gt 0 ]; then
+                    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "${usb_disks[@]}" 2>/dev/null
+                else
+                    echo "  (no se detectaron dispositivos USB; puede indicar el punto de montaje igualmente)"
+                fi
+                
+                ask_directory "Ingrese el punto de montaje del USB (ej. /media/usb): "
+                base_dir="$SELECTED_DIR"
+                ;;
+            2)
+                log "WARNING" "Guardar las evidencias en el propio sistema investigado modifica el disco analizado"
+                ask_directory "Ingrese la ruta del directorio local: "
+                base_dir="$SELECTED_DIR"
+                ;;
+            3)
+                log "INFO" "Operación cancelada por el usuario"
+                exit 0
+                ;;
+            *)
+                log "ERROR" "Opción no válida. Por favor, seleccione 1, 2 o 3."
+                ;;
+        esac
+    done
     
     # Generar nombre del directorio de evidencias (sin barra doble si base_dir es "/")
     base_dir="${base_dir%/}"
@@ -1175,8 +1118,11 @@ on_interrupt() {
 
 # Función principal
 main() {
-    # Parsear argumentos (antes de comprobar root, para que -h funcione sin sudo)
-    parse_arguments "$@"
+    # El script no admite parámetros: todo se solicita de forma interactiva
+    if [ $# -gt 0 ]; then
+        echo -e "${RED}Este script no admite parámetros.${NC} Uso: sudo $0"
+        exit 1
+    fi
     
     # Verificar privilegios
     check_root
@@ -1187,7 +1133,8 @@ main() {
     # Verificar herramientas necesarias
     check_required_tools
     
-    # Configurar directorios
+    # Datos del caso y ubicación de las evidencias
+    ask_case_name
     setup_directories
     trap on_interrupt INT TERM
     

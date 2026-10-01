@@ -37,23 +37,18 @@ chmod +x EviDumpLin.sh
 ```
 
 ### Ejecución
-Ejecutar con privilegios root:
+Ejecutar con privilegios root (el script no admite parámetros):
 ```bash
 sudo ./EviDumpLin.sh
 ```
 
----
+Todo se solicita de forma interactiva al iniciar:
 
-## Opciones de Línea de Comando
-
-| Opción         | Descripción             | Ejemplo                          |
-|----------------|-------------------------|----------------------------------|
-| `-h`, `--help` | Muestra mensaje de ayuda (no requiere root) | `./EviDumpLin.sh -h`             |
-| `-v`, `--verbose` | Activa salida detallada | `./EviDumpLin.sh -v`             |
-| `-c`, `--case` | Especifica nombre del caso (letras, números, `.`, `-`, `_`) | `./EviDumpLin.sh -c caso123`     |
-| `-o`, `--output` | Especifica directorio de salida | `./EviDumpLin.sh -o /media/usb` |
+1. **Nombre del caso** (opcional; letras, números, `.`, `-` y `_`). Pulse Enter para omitirlo.
+2. **Ubicación de las evidencias**: dispositivo USB (se muestran los detectados) o directorio local.
 
 ---
+
 ## Estructura del Directorio de Evidencias
 
 ```
