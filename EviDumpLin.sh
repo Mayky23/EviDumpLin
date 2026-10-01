@@ -2,7 +2,7 @@
 # ==============================================================================
 # EviDump - Recolección de Evidencias Forenses para Linux
 # ==============================================================================
-# Version: 2.0
+# Version: 3.0
 # Autor: MARH 
 
 # Nota: no se usa "set -e". En una recolección forense un fallo aislado
@@ -10,7 +10,7 @@
 # adquisición completa; los errores relevantes se controlan explícitamente.
 
 # Variables globales
-VERSION="2.0"
+VERSION="3.0"
 LOG_FILE=""
 STARTED_AT=$(date +%s)
 SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
